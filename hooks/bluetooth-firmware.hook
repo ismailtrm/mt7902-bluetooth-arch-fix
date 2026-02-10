@@ -1,0 +1,57 @@
+#
+# Pacman Hook for MediaTek MT7902 Bluetooth
+# Part of: https://github.com/ismailtrm/mt7902-bluetooth-arch-fix
+#
+# This hook automatically rebuilds MT7902 Bluetooth kernel modules
+# and restores firmware files after kernel or firmware package updates.
+#
+# Installation:
+#   sudo cp bluetooth-firmware.hook /etc/pacman.d/hooks/
+#
+# Documentation: https://man.archlinux.org/man/alpm-hooks.5
+#
+
+[Trigger]
+# Hook triggers on package installation or upgrade
+Operation = Install
+Operation = Upgrade
+
+# Monitors changes to package files
+Type = Package
+
+# Packages that trigger this hook:
+# - linux: Kernel package updates
+# - linux-headers: Kernel headers needed for module compilation
+# - linux-firmware: System firmware updates (may affect bluetooth)
+Target = linux
+Target = linux-headers
+Target = linux-firmware
+
+[Action]
+# Description shown during pacman operation
+Description = Rebuilding MediaTek MT7902 Bluetooth modules and restoring firmware...
+
+# When to execute: After package installation completes
+# Options: PreTransaction (before) or PostTransaction (after)
+# We use PostTransaction to ensure new kernel headers are available
+When = PostTransaction
+
+# Command to execute
+# The rebuild script handles:
+#   1. Detecting new kernel versions
+#   2. Compiling btmtk.ko and btusb.ko modules
+#   3. Installing modules to /lib/modules/$KVER/updates/
+#   4. Restoring firmware files from backup
+#   5. Running depmod to update module dependencies
+#   6. Logging all operations to /var/log/bt-module-rebuild.log
+Exec = /opt/bluetooth-firmware-backup/rebuild-bt-modules.sh
+
+# Optional: Dependencies
+# If the hook should only run when certain packages are installed,
+# you can specify them here. Currently not needed for this hook.
+# Depends = linux-headers
+
+# Optional: Abort on failure
+# By default, if the script fails, pacman continues.
+# Uncomment to abort transaction on failure:
+# NeedsTargets
