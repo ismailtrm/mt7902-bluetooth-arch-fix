@@ -23,6 +23,8 @@ This repository provides an **automated pacman hook** that:
 3. Restores firmware files from backup
 4. Ensures Bluetooth continues working after every system update
 
+> 📖 **Interested in the journey?** Read [The Development Story](docs/DEVELOPMENT-STORY.md) to see how this solution was discovered through debugging, failed attempts, and eventual automation.
+
 ## Requirements
 
 - **Arch Linux** or derivatives (Manjaro, EndeavourOS, etc.)
