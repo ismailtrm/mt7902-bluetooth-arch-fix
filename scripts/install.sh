@@ -25,6 +25,11 @@ declare -A FIRMWARE_CHECKSUMS=(
     ["mtkbt0.dat"]="bf4087994e011245aec5c76e7d938e07"
 )
 
+# Firmware files that actually need to come from the Windows extraction.
+# Populated at runtime by detect_required_firmware(); BT_RAM_CODE is dropped
+# when linux-firmware already provides it. See official_bt_firmware_present().
+REQUIRED_FIRMWARE=()
+
 #############################################################################
 # Colors and Formatting
 #############################################################################
@@ -172,13 +177,47 @@ step_clone_source() {
     export MT7902_SOURCE_DIR="$SOURCE_DIR/linux-6.18/drivers/bluetooth"
 }
 
+# linux-firmware-mediatek has shipped BT_RAM_CODE_MT7902_1_1_hdr.bin.zst since
+# the 2026-06 release. When it is present the kernel loads it directly, and
+# installing the Windows-extracted blob on top actively shadows it: the loader
+# tries the plain .bin before the packaged .bin.zst, so the older Windows
+# firmware wins. Verified 2026-08-03 on kernel 7.1.5 -- the official blob
+# (build 20250826211444) works, is 14 months newer than the Windows one
+# (20240611180935), and brings hci0 up faster (123ms vs 145ms).
+official_bt_firmware_present() {
+    [ -f "$FIRMWARE_DIR/BT_RAM_CODE_MT7902_1_1_hdr.bin.zst" ] || \
+    [ -f "$FIRMWARE_DIR/BT_RAM_CODE_MT7902_1_1_hdr.bin.xz" ]
+}
+
+detect_required_firmware() {
+    REQUIRED_FIRMWARE=()
+
+    for fw_file in "${!FIRMWARE_CHECKSUMS[@]}"; do
+        if [ "$fw_file" = "BT_RAM_CODE_MT7902_1_1_hdr.bin" ] && official_bt_firmware_present; then
+            info "linux-firmware already provides $fw_file - not extracting it from Windows"
+            continue
+        fi
+        REQUIRED_FIRMWARE+=("$fw_file")
+    done
+}
+
 step_get_firmware() {
     info "Setting up firmware files..."
 
+    detect_required_firmware
+
+    if [ ${#REQUIRED_FIRMWARE[@]} -eq 0 ]; then
+        success "All required firmware is already provided by linux-firmware - skipping extraction"
+        return 0
+    fi
+
     echo ""
-    echo "You need two firmware files:"
-    echo "  1. BT_RAM_CODE_MT7902_1_1_hdr.bin"
-    echo "  2. mtkbt0.dat"
+    echo "You need the following firmware file(s):"
+    local n=1
+    for fw_file in "${REQUIRED_FIRMWARE[@]}"; do
+        echo "  $n. $fw_file"
+        n=$((n + 1))
+    done
     echo ""
     echo "Options:"
     echo "  [1] Extract from Windows dual-boot (recommended)"
@@ -231,7 +270,7 @@ extract_from_windows() {
 
     mkdir -p "$BACKUP_DIR"
 
-    for fw_file in "${!FIRMWARE_CHECKSUMS[@]}"; do
+    for fw_file in "${REQUIRED_FIRMWARE[@]}"; do
         local src="$win_driver_path/$fw_file"
         local dst="$BACKUP_DIR/$fw_file"
 
@@ -262,7 +301,7 @@ provide_firmware_path() {
 
     mkdir -p "$BACKUP_DIR"
 
-    for fw_file in "${!FIRMWARE_CHECKSUMS[@]}"; do
+    for fw_file in "${REQUIRED_FIRMWARE[@]}"; do
         local src="$fw_dir/$fw_file"
         local dst="$BACKUP_DIR/$fw_file"
 
