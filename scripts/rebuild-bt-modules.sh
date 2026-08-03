@@ -131,6 +131,18 @@ build_modules_for_kernel() {
     fi
 }
 
+# linux-firmware-mediatek has shipped BT_RAM_CODE_MT7902_1_1_hdr.bin.zst since
+# the 2026-06 release. The kernel firmware loader tries the plain .bin before
+# the packaged .bin.zst, so restoring the Windows-extracted blob here silently
+# shadows the official firmware -- and does so again after every kernel or
+# linux-firmware update, which makes the shadowing very hard to notice.
+# Verified 2026-08-03 on kernel 7.1.5: the official blob (build 20250826211444)
+# is 14 months newer than the Windows one (20240611180935) and works.
+official_bt_firmware_present() {
+    [ -f "$FIRMWARE_DIR/BT_RAM_CODE_MT7902_1_1_hdr.bin.zst" ] || \
+    [ -f "$FIRMWARE_DIR/BT_RAM_CODE_MT7902_1_1_hdr.bin.xz" ]
+}
+
 restore_firmware() {
     log "Restoring firmware files"
 
@@ -139,6 +151,11 @@ restore_firmware() {
 
     # Copy firmware files from backup
     for fw_file in "${FIRMWARE_FILES[@]}"; do
+        if [ "$fw_file" = "BT_RAM_CODE_MT7902_1_1_hdr.bin" ] && official_bt_firmware_present; then
+            log "  Skipped: $fw_file (provided by linux-firmware, not shadowing it)"
+            continue
+        fi
+
         if [ -f "$BACKUP_DIR/$fw_file" ]; then
             cp -f "$BACKUP_DIR/$fw_file" "$FIRMWARE_DIR/"
             log "  Restored: $fw_file"

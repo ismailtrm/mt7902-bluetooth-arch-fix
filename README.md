@@ -31,6 +31,9 @@ This repository provides an **automated pacman hook** that:
 - **MediaTek MT7902 Bluetooth adapter**
 - Packages: `linux`, `linux-headers`, `base-devel`, `git`
 - **Firmware files** (extract from Windows dual-boot or existing installation)
+  - Since the 2026-06 `linux-firmware` release, `BT_RAM_CODE_MT7902_1_1_hdr.bin.zst`
+    ships with `linux-firmware-mediatek`. If you have it, the installer detects it
+    and will **not** extract that file from Windows — see [Firmware precedence](#firmware-precedence).
 
 ## Quick Installation
 
@@ -71,6 +74,10 @@ git clone https://github.com/OnlineLearningTutorials/mt7902_temp
 ```
 
 #### Step 3: Extract Firmware from Windows
+
+> **Check first:** if `/lib/firmware/mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin.zst`
+> exists, `linux-firmware` already provides that file. Copy only `mtkbt0.dat`
+> below — copying the Windows `BT_RAM_CODE` would shadow the newer official one.
 
 If you have Windows dual-boot:
 
@@ -133,7 +140,28 @@ The solution consists of three components:
 1. **Firmware Files** (`BT_RAM_CODE_MT7902_1_1_hdr.bin`, `mtkbt0.dat`)
    - Extracted from Windows drivers
    - Backed up to `/opt/bluetooth-firmware-backup/`
-   - Restored after updates
+   - Restored after updates — **except** `BT_RAM_CODE_MT7902_1_1_hdr.bin` when
+     `linux-firmware` already provides it (see below)
+
+### Firmware precedence
+
+The kernel firmware loader tries `BT_RAM_CODE_MT7902_1_1_hdr.bin` **before**
+`BT_RAM_CODE_MT7902_1_1_hdr.bin.zst`. So if both exist, the uncompressed
+Windows-extracted blob wins and silently shadows the packaged one — and the
+pacman hook used to re-create that shadow after every kernel/firmware update,
+which made it easy to miss.
+
+Since `linux-firmware-mediatek` started shipping the official blob, this repo
+skips restoring the Windows copy whenever a packaged `.bin.zst`/`.bin.xz` is
+present. On older systems without it, the previous behaviour is unchanged.
+
+To check which firmware is actually loaded, read the build timestamp — don't guess:
+
+```bash
+journalctl -k | grep "hci0: HW/SW Version"
+# Build Time: 20250826211444  -> official linux-firmware blob (Aug 2025)
+# Build Time: 20240611180935  -> Windows-extracted blob (Jun 2024)
+```
 
 2. **Kernel Modules** (`btmtk.ko`, `btusb.ko`)
    - Patched versions from [mt7902_temp](https://github.com/OnlineLearningTutorials/mt7902_temp)
