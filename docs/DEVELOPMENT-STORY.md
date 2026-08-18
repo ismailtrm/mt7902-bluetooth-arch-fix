@@ -1,5 +1,14 @@
 # The Journey: Solving MT7902 Bluetooth on Arch Linux
 
+> ## ⚠️ Historical — written before mainline support existed
+>
+> This is an account of getting MT7902 Bluetooth working when no in-tree driver
+> was available. Since Linux 7.1 that work is no longer necessary. It is kept as
+> a record of the period, and remains accurate about it.
+>
+> What came later — the firmware wedge, its root cause, and two patches merged
+> upstream: [FIRMWARE-WEDGE.md](FIRMWARE-WEDGE.md)
+
 This document chronicles the debugging journey, failed attempts, and eventual solution for getting MediaTek MT7902 Bluetooth working reliably on Arch Linux.
 
 ## Table of Contents

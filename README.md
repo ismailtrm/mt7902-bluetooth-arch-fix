@@ -1,270 +1,194 @@
-# MT7902 Bluetooth Fix for Arch Linux
+# MT7902 Bluetooth on Linux
 
-> **Automated solution for MediaTek MT7902 Bluetooth on Arch Linux**
-> Survives kernel updates without manual intervention
+> ## ⚠️ DEPRECATED — do not install the custom modules
+>
+> **Since Linux 7.1 the mainline kernel supports MT7902 Bluetooth out of the box.**
+> The out-of-tree modules, the Windows firmware extraction and the pacman hook that
+> this repository used to install are **no longer needed, and installing them today
+> can shadow the working in-tree driver.**
+>
+> If you followed the old instructions, see [Removing the old setup](#removing-the-old-setup).
+>
+> **The repository is now a troubleshooting reference** for the failure mode that
+> remains: the controller wedging after a firmware coredump. That part is still
+> unsolved upstream and is documented here because nothing else documents it.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793D1?logo=arch-linux&logoColor=fff)](https://archlinux.org/)
 
-## The Problem
+---
 
-The MediaTek MT7902 Bluetooth adapter requires custom firmware and patched kernel modules that aren't included in the standard Linux kernel. When you run `pacman -Syu` and the kernel updates, your custom modules are left in the old kernel directory, causing Bluetooth to stop working.
+## Do I need anything from this repo?
 
-**Common symptoms:**
-- Bluetooth adapter not detected after kernel update
-- `bluetoothctl` shows "No default controller available"
-- `dmesg` shows firmware loading errors for MT7902
+| Your kernel | What you need |
+|---|---|
+| **≥ 7.1** | **Nothing.** Stock `btusb`/`btmtk` drive MT7902. Do not install custom modules. |
+| < 7.1 | Upgrade your kernel. That is easier and safer than the old workaround. |
+| Any version, BT died and won't come back | → [Recovery](docs/RECOVERY.md) |
 
-## The Solution
+In-tree support landed in commit
+[`51c4173b89fe`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=51c4173b89fe)
+("Bluetooth: btusb: Add new VID/PID 13d3/3579 for MT7902", Sean Wang, Feb 2026),
+first released in **v7.1-rc1**.
 
-This repository provides an **automated pacman hook** that:
-1. Detects kernel updates (`linux`, `linux-headers`, `linux-firmware`)
-2. Automatically rebuilds custom kernel modules for the new kernel
-3. Restores firmware files from backup
-4. Ensures Bluetooth continues working after every system update
-
-> 📖 **Interested in the journey?** Read [The Development Story](docs/DEVELOPMENT-STORY.md) to see how this solution was discovered through debugging, failed attempts, and eventual automation.
-
-## Requirements
-
-- **Arch Linux** or derivatives (Manjaro, EndeavourOS, etc.)
-- **MediaTek MT7902 Bluetooth adapter**
-- Packages: `linux`, `linux-headers`, `base-devel`, `git`
-- **Firmware files** (extract from Windows dual-boot or existing installation)
-  - Since the 2026-06 `linux-firmware` release, `BT_RAM_CODE_MT7902_1_1_hdr.bin.zst`
-    ships with `linux-firmware-mediatek`. If you have it, the installer detects it
-    and will **not** extract that file from Windows — see [Firmware precedence](#firmware-precedence).
-
-## Quick Installation
-
-### Option 1: Automated Installer (Recommended)
+### Verify it yourself
 
 ```bash
-# Clone the repository
-git clone https://github.com/ismailtrm/mt7902-bluetooth-arch-fix
-cd mt7902-bluetooth-arch-fix
+# Is the device bound to the in-tree driver?
+readlink -f /sys/bus/usb/devices/*/driver | grep btusb
 
-# Run the installer
-sudo ./scripts/install.sh
+# Which module file is actually loaded? (should be under kernel/, NOT updates/)
+modinfo -n btusb
+
+# Is the controller up?
+bluetoothctl show
 ```
 
-The installer will:
-- Check prerequisites
-- Clone the MT7902 driver source
-- Prompt you for firmware files (with extraction instructions)
-- Set up the pacman hook
-- Test the configuration
+If `modinfo -n btusb` points at `/lib/modules/<ver>/updates/`, you are still running
+an out-of-tree module — see [Removing the old setup](#removing-the-old-setup).
 
-### Option 2: Manual Installation
+---
+
+## The remaining problem: the controller wedges and disappears
+
+This is a real, still-unfixed bug and the reason this repository is still here.
+
+**Symptoms**
+
+- Bluetooth works fine, then stops — often after the machine has been idle
+- `bluetoothctl show` prints `No default controller available`
+- The USB device is **gone from the bus entirely**: `lsusb` no longer lists `13d3:3579`
+- `dmesg` shows the controller failing to enumerate:
+  `-110` → `-62` → `unable to enumerate USB device`
+- `bluetoothctl` **hangs** when no controller is present
+- Every subsequent boot takes ~66 s longer, because initrd keeps retrying the dead device
+
+**What actually fixes it**
+
+Only a full power drain. Reboot does not work; neither does a normal power-off.
+
+| Level | Method | Works? |
+|---|---|---|
+| 1 | `reboot` (warm) | ❌ |
+| 2 | `poweroff`, then power button (S5, AC still connected) | ❌ |
+| 3 | **`poweroff` → unplug AC → hold power button 30 s → replug → boot** | ✅ |
+
+Full details, plus every in-band reset path that was measured and ruled out
+(rfkill, USB port power cycling, ACPI `_RST`, WiFi-side chip reset, PCIe FLR and
+secondary bus reset): **[docs/RECOVERY.md](docs/RECOVERY.md)**
+
+**Why no software fix exists**
+
+The controller asserts inside its own **ROM**, not in the loadable firmware blob:
+
+```
+<ASSERT> system/rom/transport/tra_usb3.c #764 - rc=*, BTSYS, id=0x4 idle
+```
+
+That is why swapping firmware blobs never helped, and why no reset path reachable
+from the host brings it back. Analysis, the captured coredump, and a deterministic
+one-command reproducer: **[docs/FIRMWARE-WEDGE.md](docs/FIRMWARE-WEDGE.md)**
+
+---
+
+## Upstream patches from this investigation
+
+Reading the reset path turned up two bugs in `btmtk_usb_subsys_reset()`: a failed
+subsystem reset was reported to the caller as success. Both are merged into
+`bluetooth-next`:
+
+| Commit | Fix |
+|---|---|
+| [`771e812f94b3`](https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git/commit/?id=771e812f94b3) | Do not report success when subsys reset fails |
+| [`54c03e6bc718`](https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git/commit/?id=54c03e6bc718) | Do not discard the subsystem reset timeout |
+
+These make the failure **visible** to the caller. They do not fix the wedge — the
+root cause is in the closed-source ROM and only MediaTek can address that.
+
+---
+
+## Removing the old setup
+
+If you previously installed the pacman hook and custom modules from this repo:
+
+```bash
+# 1. Stop the hook from rebuilding out-of-tree modules on every kernel update
+sudo rm -f /etc/pacman.d/hooks/bluetooth-firmware.hook
+
+# 2. Disable the out-of-tree modules so the in-tree ones win
+sudo find /lib/modules/*/updates \
+  \( -name 'btusb.ko*' -o -name 'btmtk.ko*' \) ! -name '*.disabled' \
+  -exec mv -v {} {}.disabled \;
+sudo depmod -a
+
+# 3. Remove the Windows-extracted blob if it shadows the packaged one
+#    (the loader prefers .bin over .bin.zst — see docs/HOW-IT-WORKS.md)
+ls -l /lib/firmware/mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin*
+
+# 4. Reboot, then confirm which firmware is in use
+journalctl -k | grep "hci0: HW/SW Version"
+```
+
+Keep the `.disabled` copies until you have confirmed Bluetooth works on stock
+modules; then remove `/opt/bluetooth-firmware-backup` and `~/mt7902_temp`.
+
+---
+
+## Historical: the original pacman-hook workaround
 
 <details>
-<summary>Click to expand manual installation steps</summary>
+<summary>What this repo used to do (kernels &lt; 7.1) — kept for reference, do not use</summary>
 
-#### Step 1: Install Prerequisites
+Before in-tree support existed, MT7902 Bluetooth needed patched `btusb`/`btmtk`
+modules built from an out-of-tree source, plus firmware extracted from a Windows
+installation. Because `pacman -Syu` installs a new kernel into a new module
+directory, the custom modules had to be rebuilt on every update — which this
+repository automated with a pacman hook.
 
-```bash
-sudo pacman -S linux-headers base-devel git
-```
+The scripts and hook are still in `scripts/` and `hooks/`, and the design is
+described in [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md). They are kept so the
+old behaviour stays auditable, **not** because they should be run.
 
-#### Step 2: Clone MT7902 Driver Source
-
-```bash
-cd ~
-git clone https://github.com/OnlineLearningTutorials/mt7902_temp
-```
-
-#### Step 3: Extract Firmware from Windows
-
-> **Check first:** if `/lib/firmware/mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin.zst`
-> exists, `linux-firmware` already provides that file. Copy only `mtkbt0.dat`
-> below — copying the Windows `BT_RAM_CODE` would shadow the newer official one.
-
-If you have Windows dual-boot:
-
-```bash
-# Mount Windows partition (adjust /dev/nvme0n1p3 to your partition)
-sudo mkdir -p /mnt/windows
-sudo mount -t ntfs3 -o ro /dev/nvme0n1p3 /mnt/windows
-
-# Create backup directory
-sudo mkdir -p /opt/bluetooth-firmware-backup
-
-# Copy firmware files
-sudo cp /mnt/windows/Windows/System32/drivers/BT_RAM_CODE_MT7902_1_1_hdr.bin /opt/bluetooth-firmware-backup/
-sudo cp /mnt/windows/Windows/System32/drivers/mtkbt0.dat /opt/bluetooth-firmware-backup/
-
-# Unmount Windows
-sudo umount /mnt/windows
-```
-
-**Verify firmware checksums:**
-```bash
-md5sum /opt/bluetooth-firmware-backup/BT_RAM_CODE_MT7902_1_1_hdr.bin
-# Should be: 900a342bf03d5b844947aebe854af55d
-
-md5sum /opt/bluetooth-firmware-backup/mtkbt0.dat
-# Should be: bf4087994e011245aec5c76e7d938e07
-```
-
-#### Step 4: Install Rebuild Script
-
-```bash
-cd ~/mt7902-bluetooth-arch-fix
-sudo cp scripts/rebuild-bt-modules.sh /opt/bluetooth-firmware-backup/
-sudo chmod +x /opt/bluetooth-firmware-backup/rebuild-bt-modules.sh
-```
-
-#### Step 5: Install Pacman Hook
-
-```bash
-sudo cp hooks/bluetooth-firmware.hook /etc/pacman.d/hooks/
-```
-
-#### Step 6: Initial Build
-
-```bash
-sudo /opt/bluetooth-firmware-backup/rebuild-bt-modules.sh
-```
-
-Check the log for success:
-```bash
-tail -20 /var/log/bt-module-rebuild.log
-```
+The write-up of how that solution was originally found is in
+[docs/DEVELOPMENT-STORY.md](docs/DEVELOPMENT-STORY.md); it is still a decent
+account of debugging an unsupported device, and remains accurate about that period.
 
 </details>
 
-## How It Works
+---
 
-The solution consists of three components:
+## Documentation
 
-1. **Firmware Files** (`BT_RAM_CODE_MT7902_1_1_hdr.bin`, `mtkbt0.dat`)
-   - Extracted from Windows drivers
-   - Backed up to `/opt/bluetooth-firmware-backup/`
-   - Restored after updates — **except** `BT_RAM_CODE_MT7902_1_1_hdr.bin` when
-     `linux-firmware` already provides it (see below)
+| Document | Contents |
+|---|---|
+| [docs/RECOVERY.md](docs/RECOVERY.md) | Getting a wedged controller back; every reset path that was tested |
+| [docs/FIRMWARE-WEDGE.md](docs/FIRMWARE-WEDGE.md) | Root cause, coredump capture, reproducer, upstream patches |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Issues with the legacy setup (historical) |
+| [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) | Design of the legacy hook + firmware precedence (historical) |
+| [docs/DEVELOPMENT-STORY.md](docs/DEVELOPMENT-STORY.md) | How the original workaround was found (historical) |
+| [docs/REFERENCES.md](docs/REFERENCES.md) | External links and sources |
 
-### Firmware precedence
+## Hardware this was tested on
 
-The kernel firmware loader tries `BT_RAM_CODE_MT7902_1_1_hdr.bin` **before**
-`BT_RAM_CODE_MT7902_1_1_hdr.bin.zst`. So if both exist, the uncompressed
-Windows-extracted blob wins and silently shadows the packaged one — and the
-pacman hook used to re-create that shadow after every kernel/firmware update,
-which made it easy to miss.
+ASUS Vivobook, MediaTek MT7902 combo chip:
 
-Since `linux-firmware-mediatek` started shipping the official blob, this repo
-skips restoring the Windows copy whenever a packaged `.bin.zst`/`.bin.xz` is
-present. On older systems without it, the previous behaviour is unchanged.
-
-To check which firmware is actually loaded, read the build timestamp — don't guess:
-
-```bash
-journalctl -k | grep "hci0: HW/SW Version"
-# Build Time: 20250826211444  -> official linux-firmware blob (Aug 2025)
-# Build Time: 20240611180935  -> Windows-extracted blob (Jun 2024)
-```
-
-2. **Kernel Modules** (`btmtk.ko`, `btusb.ko`)
-   - Patched versions from [mt7902_temp](https://github.com/OnlineLearningTutorials/mt7902_temp)
-   - Compiled against current kernel headers
-   - Installed to `/lib/modules/$KERNEL_VERSION/updates/`
-
-3. **Pacman Hook** (automatic trigger)
-   - Runs after `linux`, `linux-headers`, or `linux-firmware` updates
-   - Executes rebuild script
-   - Logs to `/var/log/bt-module-rebuild.log`
-
-See [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md) for technical deep-dive.
-
-## Verification
-
-### Test Bluetooth
-
-```bash
-bluetoothctl show
-```
-
-Expected output:
-```
-Controller XX:XX:XX:XX:XX:XX (public)
-	Manufacturer: 0x0046 (70)
-	Name: archlinux
-	Powered: yes
-```
-
-### Test After Kernel Update
-
-```bash
-# Update system
-sudo pacman -Syu
-
-# Check the rebuild log
-tail -20 /var/log/bt-module-rebuild.log
-
-# Look for:
-# - "Build successful for 6.x.x"
-# - "Modules installed for 6.x.x"
-# - "Bluetooth module rebuild complete"
-
-# Reboot to new kernel
-reboot
-
-# Verify Bluetooth works
-bluetoothctl show
-```
-
-## Troubleshooting
-
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues and solutions.
-
-**Quick diagnostics:**
-
-```bash
-# Check if modules are loaded
-lsmod | grep bt
-
-# Check kernel messages
-dmesg | grep -i bluetooth | tail -20
-
-# Check rebuild log
-cat /var/log/bt-module-rebuild.log
-
-# Verify firmware files exist
-ls -l /lib/firmware/mediatek/BT_RAM_CODE_MT7902_1_1_hdr.bin
-ls -l /lib/firmware/mediatek/mtkbt0.dat
-```
-
-## Uninstallation
-
-```bash
-# Remove pacman hook
-sudo rm /etc/pacman.d/hooks/bluetooth-firmware.hook
-
-# Remove backup directory
-sudo rm -rf /opt/bluetooth-firmware-backup
-
-# Remove source (optional)
-rm -rf ~/mt7902_temp
-```
+- Bluetooth: USB `13d3:3579` — `btusb` + `btmtk`
+- WiFi: PCIe `14c3:7902` — `mt7921e` (a separate driver stack; the BT wedge does not affect it)
 
 ## Credits
 
-- **Solution developed by:** [ismailtrm](https://github.com/ismailtrm)
-- **MT7902 kernel drivers:** [OnlineLearningTutorials/mt7902_temp](https://github.com/OnlineLearningTutorials/mt7902_temp)
-- **Firmware source:** MediaTek Windows drivers
-- **Inspired by:** Community efforts to support MediaTek hardware on Linux
+- Investigation and documentation: [ismailtrm](https://github.com/ismailtrm)
+- In-tree MT7902 support: Sean Wang and the linux-bluetooth maintainers
+- Legacy out-of-tree driver source: [OnlineLearningTutorials/mt7902_temp](https://github.com/OnlineLearningTutorials/mt7902_temp)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
-**Note:** The firmware files themselves are proprietary and copyrighted by MediaTek. This repository provides tools to use your own legally-obtained firmware from Windows installations.
+Firmware files are proprietary to MediaTek and are not distributed here.
 
 ## Contributing
 
-Issues and pull requests are welcome! Please see the [issue tracker](https://github.com/ismailtrm/mt7902-bluetooth-arch-fix/issues).
-
-## References
-
-- [Arch Linux Pacman Hooks Documentation](https://man.archlinux.org/man/alpm-hooks.5)
-- [Linux Kernel Bluetooth Subsystem](https://www.kernel.org/doc/html/latest/networking/bluetooth.html)
-- [MT7902 Driver Source](https://github.com/OnlineLearningTutorials/mt7902_temp)
+If you have an MT7902 and hit the wedge, a report is genuinely useful — especially
+the output of `docs/FIRMWARE-WEDGE.md`'s coredump capture. Please open an
+[issue](https://github.com/ismailtrm/mt7902-bluetooth-arch-fix/issues).
