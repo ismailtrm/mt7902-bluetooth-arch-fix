@@ -1,5 +1,15 @@
 # How It Works - Technical Deep Dive
 
+> ## ⚠️ Historical — describes the legacy out-of-tree setup
+>
+> Since Linux 7.1 the mainline kernel drives MT7902 Bluetooth directly, so the
+> hook and custom modules described below are no longer needed. This document is
+> kept because the **firmware precedence** section still explains a real trap
+> (the loader prefers `.bin` over `.bin.zst`, so a Windows-extracted blob can
+> silently shadow the packaged one).
+>
+> Current docs: [RECOVERY.md](RECOVERY.md) · [FIRMWARE-WEDGE.md](FIRMWARE-WEDGE.md)
+
 This document provides a detailed technical explanation of the MT7902 Bluetooth fix for Arch Linux.
 
 ## Table of Contents

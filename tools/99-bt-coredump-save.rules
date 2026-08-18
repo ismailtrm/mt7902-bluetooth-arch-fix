@@ -1,0 +1,23 @@
+# Persist MediaTek Bluetooth firmware coredumps before the kernel frees them.
+#
+# The kernel drops devcoredump entries after DEVCD_TIMEOUT, which is 5 minutes
+# (include/linux/devcoredump.h). The firmware dump produced when an MT7902
+# wedges was therefore never available for analysis -- by the time anyone
+# noticed Bluetooth was broken, the evidence had already been freed.
+#
+# This rule writes the dump to disk the moment the entry appears.
+#
+# Install:
+#   sudo cp save-bt-coredump.sh /usr/local/bin/
+#   sudo chmod +x /usr/local/bin/save-bt-coredump.sh
+#   sudo cp 99-bt-coredump-save.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#
+# Output: /var/log/bt-coredumps/<timestamp>-devcdN.bin
+#         plus .meta.txt and .live-state.txt
+#
+# Note: this fires for ANY devcoredump event, not only Bluetooth ones. The
+# script records the failing device in its .meta.txt so unrelated dumps are
+# easy to tell apart.
+
+ACTION=="add", SUBSYSTEM=="devcoredump", RUN+="/usr/local/bin/save-bt-coredump.sh /sys%p"

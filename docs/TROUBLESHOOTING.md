@@ -1,5 +1,12 @@
 # Troubleshooting Guide
 
+> ## ⚠️ Historical — covers the legacy out-of-tree setup
+>
+> These are issues with the pacman hook and custom modules, which are deprecated.
+> If your Bluetooth controller has **disappeared from the USB bus**, that is a
+> different problem and this guide will not help:
+> → **[RECOVERY.md](RECOVERY.md)**
+
 This guide covers common issues and their solutions when using the MT7902 Bluetooth fix.
 
 ## Table of Contents
