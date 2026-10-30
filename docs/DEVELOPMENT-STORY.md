@@ -155,7 +155,7 @@ sudo depmod -a
 
 ```bash
 $ bluetoothctl show
-Controller CC:47:40:24:D3:7D (public)
+Controller XX:XX:XX:XX:XX:XX (public)
 	Manufacturer: 0x0046 (70)
 	Name: archlinux
 	Powered: yes
@@ -395,7 +395,7 @@ sudo pacman -Syu
 **After reboot:**
 ```bash
 $ bluetoothctl show
-Controller CC:47:40:24:D3:7D (public)
+Controller XX:XX:XX:XX:XX:XX (public)
 	Manufacturer: 0x0046 (70)
 	Name: archlinux
 	Powered: yes
