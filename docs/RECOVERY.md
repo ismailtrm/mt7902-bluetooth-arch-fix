@@ -75,7 +75,7 @@ a normal 145–223 ms. It settles on subsequent boots.
 
 An earlier version of this document claimed a Windows boot was the only cure.
 **That was wrong**, and it mattered: believing it stopped the full-drain path
-from being tried for months. Level 3 was then measured directly and worked with
+from being tried until the next failure, twelve days later. Level 3 was then measured directly and worked with
 no Windows involved.
 
 ---

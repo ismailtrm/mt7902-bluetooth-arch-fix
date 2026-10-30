@@ -84,8 +84,7 @@ This document provides links to all relevant sources, documentation, and related
 
 - **Chipset:** MediaTek MT7902
 - **Connectivity:** Wi-Fi 6E + Bluetooth 5.3
-- **USB Vendor ID:** 0x0489 (Foxconn)
-- **USB Product ID:** 0xe0e2
+- **USB ID on the tested laptop:** 13d3:3579
 - **PCI Vendor ID:** 0x14c3 (MediaTek)
 - **Bluetooth Manufacturer ID:** 0x0046 (70 decimal)
 
@@ -97,7 +96,7 @@ This document provides links to all relevant sources, documentation, and related
 
 **Linux Firmware Repository:** [linux-firmware.git](https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/)
 - Contains firmware for MT7921 and MT7922
-- MT7902 firmware **not yet included** (as of early 2024)
+- MT7902 firmware **not yet included** when this was written (early 2026)
 
 ## Community Resources
 

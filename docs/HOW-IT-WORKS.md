@@ -24,7 +24,7 @@ This document provides a detailed technical explanation of the MT7902 Bluetooth 
 
 ## MT7902 Hardware Overview
 
-The **MediaTek MT7902** is a modern wireless chipset that provides both Wi-Fi and Bluetooth connectivity. It's commonly found in laptops manufactured in 2023-2024.
+The **MediaTek MT7902** is a modern wireless chipset that provides both Wi-Fi and Bluetooth connectivity.
 
 **Key specifications:**
 - Manufacturer: MediaTek (Vendor ID: 0x0046)
@@ -48,7 +48,7 @@ The MT7902 requires specific firmware files to initialize the Bluetooth hardware
 - `BT_RAM_CODE_MT7902_1_1_hdr.bin` - Main Bluetooth firmware
 - `mtkbt0.dat` - Configuration/calibration data
 
-These files are **not included** in the `linux-firmware` package as of early 2024.
+These files are **not included** in the `linux-firmware` package as of early 2026, when this was written.
 
 ### 2. Kernel Module Compatibility
 
