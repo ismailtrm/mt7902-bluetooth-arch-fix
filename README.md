@@ -77,33 +77,37 @@ Full details, plus every in-band reset path that was measured and ruled out
 (rfkill, USB port power cycling, ACPI `_RST`, WiFi-side chip reset, PCIe FLR and
 secondary bus reset): **[docs/RECOVERY.md](docs/RECOVERY.md)**
 
-**Why no software fix exists**
+**Why no software fix is known**
 
-The controller asserts inside its own **ROM**, not in the loadable firmware blob:
+The firmware asserts on its own while idle. Ten of ten captured natural failures
+carry the same assert:
 
 ```
-<ASSERT> system/rom/transport/tra_usb3.c #764 - rc=*, BTSYS, id=0x4 idle
+<ASSERT> ../bluetooth/system/debug/sys_log_interface_emi.c #811 - ... BTSYS, id=0x4 idle
 ```
 
-That is why swapping firmware blobs never helped, and why no reset path reachable
-from the host brings it back. Analysis, the captured coredump, and a deterministic
-one-command reproducer: **[docs/FIRMWARE-WEDGE.md](docs/FIRMWARE-WEDGE.md)**
+The driver's reset sequence works on a healthy chip, but after the assert the
+controller stops answering and drops off the bus. Two different firmware blobs
+failed the same way, and no reset path reachable from the host brings it back.
+Evidence and a one-command reproducer: **[docs/FIRMWARE-WEDGE.md](docs/FIRMWARE-WEDGE.md)**
+
+> **Correction:** earlier versions of this repository placed the fault in mask ROM,
+> citing `system/rom/transport/tra_usb3.c #764`. That assert only appears when a
+> coredump is triggered by hand, so the conclusion was wrong.
 
 ---
 
-## Upstream patches from this investigation
+## Upstream work from this investigation
 
-Reading the reset path turned up two bugs in `btmtk_usb_subsys_reset()`: a failed
-subsystem reset was reported to the caller as success. Both are merged into
-`bluetooth-next`:
-
-| Commit | Fix |
+| Change | Status |
 |---|---|
-| [`771e812f94b3`](https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git/commit/?id=771e812f94b3) | Do not report success when subsys reset fails |
-| [`54c03e6bc718`](https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git/commit/?id=54c03e6bc718) | Do not discard the subsystem reset timeout |
+| [`59c3ee19ca88`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=59c3ee19ca88) Do not report success when subsys reset fails | Linux 7.3, stable 7.2, 6.18, 6.12 |
+| [`21b50c24843b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=21b50c24843b) Do not discard the subsystem reset timeout | Linux 7.3, stable 7.2, 6.18, 6.12 |
+| [Fix error handling in `btmtk_usb_isointf_init()`](https://lore.kernel.org/linux-bluetooth/20261029224022.1233751-1-ismailtarim7@gmail.com/) | accepted into `bluetooth-next` |
+| [Bug report with the assert and a register comparison](https://lore.kernel.org/linux-bluetooth/20261025120328.1312536-1-ismailtarim7@gmail.com/) | sent to linux-bluetooth and MediaTek, October 2026 |
 
-These make the failure **visible** to the caller. They do not fix the wedge — the
-root cause is in the closed-source ROM and only MediaTek can address that.
+The patches make failures **visible** to the caller. They do not fix the wedge,
+which comes from closed-source firmware that only MediaTek can change.
 
 ---
 
