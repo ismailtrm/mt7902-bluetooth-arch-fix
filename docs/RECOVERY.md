@@ -117,28 +117,28 @@ that cannot fix the failure.
 
 ## Why nothing in-band works
 
-The controller asserts inside its **ROM**, before any host-reachable reset path
-can help:
+The firmware asserts on its own while idle:
 
 ```
-<ASSERT> system/rom/transport/tra_usb3.c #764 - rc=*, BTSYS, id=0x4 idle
+<ASSERT> ../bluetooth/system/debug/sys_log_interface_emi.c #811 - ... BTSYS, id=0x4 idle
 ```
 
-`system/rom/...` is the key part — the fault is in mask ROM, not in the firmware
-blob the kernel uploads. That explains why firmware updates never changed the
-behaviour, and why only cutting power resets it.
+The driver's reset works on a healthy chip. After the assert, the same sequence ends
+with the chip id read timing out and the device leaving the bus. Why only cutting power
+clears this state is unknown; the firmware is closed and the question is open with
+MediaTek.
 
-Full analysis, the captured coredump, and a one-command reproducer:
+Full analysis, register comparison and a one-command reproducer:
 [FIRMWARE-WEDGE.md](FIRMWARE-WEDGE.md).
 
 ---
 
 ## Frequency and triggers
 
-- Observed interval between wedges: **roughly 12 days** of normal use
+- Observed interval: **irregular**, from 46 minutes after a cold boot to 17 days
 - The chip was **idle** at the moment of failure (`id=0x4 idle` in the assert),
   consistent with wedges appearing after the machine sat unused
 - **Powering off a Bluetooth keyboard does not trigger it** — that hypothesis was
   tested and ruled out
 - **Firmware version is not a factor** — two different blobs produced identical
-  failures, which the ROM-level assert explains
+  failures

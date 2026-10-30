@@ -8,44 +8,64 @@ For the practical "my Bluetooth is dead, what do I do" answer, see
 
 ---
 
-## Root cause: an assert in mask ROM
+## Root cause: a firmware assert, then a reset that cannot recover
 
 When the controller fails it emits a firmware coredump. The kernel exposes that
-dump through the `devcoredump` subsystem — but only for five minutes (see
-[Capturing the dump](#capturing-the-dump) below). Once captured, the payload is
-unambiguous:
+dump through the `devcoredump` subsystem, but only for five minutes (see
+[Capturing the dump](#capturing-the-dump) below). Twelve natural failures were
+logged from 2026-08-03 to 2026-10-25. Ten were captured, on kernels 7.1.8 to 7.2.11,
+and all ten carry the same assert:
 
 ```
-; exception type: ASSERT      ;;[CONNSYS] coredump start ..
-<ASSERT> system/rom/transport/tra_usb3.c #764 -
-    rc=*, BTSYS, id=0x4 idle, isr=0x81A6F6, irq=0x11, lr=0x0, asr_t=54540991
-;PC log(0..N)  ;LR log(0..N)  ;coredump end
-Controller Name: 0x7902   Firmware Version: 0x8A00
+<ASSERT> ../bluetooth/system/debug/sys_log_interface_emi.c #811 -
+    0, 0x6455, 0x1010707, 0xFF150001, rc=0, BTSYS, id=0x4 idle,
+    irq=0x2, isr=0x929A5C (five dumps) / 0x929EEA (five dumps)
 ```
 
-Three things follow from this:
+The chip is idle (`id=0x4 idle`) and nothing on the host side precedes the assert.
 
-| Observation | Consequence |
-|---|---|
-| Path is `system/rom/...` | The assert lives in **mask ROM**, not in the firmware blob the kernel uploads |
-| `id=0x4 idle` | The chip faults while **idle**, matching wedges that appear after the machine sits unused |
-| Source file + line are MediaTek-internal | Only MediaTek can fix it; there is no host-side patch for this |
+Comparing the driver's reset on a healthy chip with four natural failures, through
+the same `btusb_mtk_reset()` path:
 
-The ROM location is the single most useful fact here. It explains a result that
-was confusing for months: **two different firmware blobs produced identical
-failures.** Updating firmware could never have helped, because the faulting code
-is not in the firmware.
+| | Healthy chip | After natural assert |
+|---|---|---|
+| WDT `0x740003a0` | `0x0` | `0x1` |
+| SUBSYS_RST `0x70002610` | `0x0` | `0x0` |
+| MISC `0x70002510` | `0x500` | `0x500` |
+| Chip id read `0x70010200` | returns | times out (5.1 s) |
+| Result | re-enumerates, setup 121 ms | descriptor read -110, port gone |
 
-It also explains why every reset path reachable from the host fails
-([full list](RECOVERY.md#reset-paths-that-do-not-work)) — including the ACPI
-`_RST` GPIO, which does execute and still does not revive the chip.
+What follows from this:
+
+- The generic reset sequence works on a healthy MT7902, so a missing MT7902 branch
+  in the driver is an unlikely cause.
+- `MTK_BT_RST_DONE` in MISC reads the same in both cases, so the driver's completion
+  check cannot tell a failed reset from a good one here.
+- The roughly 10 s between `Mediatek coredump end` and `Can't get device id` is two
+  USB control timeouts: `usb_driver_release_interface()` on the ISO interface (5.35 s)
+  and the chip id read (5.1 s). This adds latency and does not change the outcome.
+- Two firmware blobs (build times 20240611 and 20250826) failed the same way, so
+  moving between them does not help.
+- Every reset path reachable from the host fails
+  ([full list](RECOVERY.md#reset-paths-that-do-not-work)), including the ACPI `_RST`
+  GPIO, which does execute and still does not revive the chip.
+
+The question for MediaTek is open: once the WDT register reads 1, is there a sequence
+that recovers the Bluetooth MCU without removing power?
+[Full report on linux-bluetooth](https://lore.kernel.org/linux-bluetooth/20261025120328.1312536-1-ismailtarim7@gmail.com/).
+
+> **Correction:** this document used to say the assert lives in mask ROM, based on
+> `system/rom/transport/tra_usb3.c #764`. That assert comes from triggering a coredump
+> by hand (2 of 2 manual triggers). The natural failures assert in
+> `sys_log_interface_emi.c #811`. The ROM conclusion was an artifact of the trigger.
 
 ---
 
 ## Reproducing it on demand
 
-The natural failure interval is roughly 12 days, which makes investigation
-painful. It can be triggered deliberately in about one second:
+Natural failures come at irregular intervals, from 46 minutes after a cold boot to
+17 days, which makes investigation painful. The same outcome can be triggered
+deliberately in about one second:
 
 ```bash
 echo 1 > /sys/class/bluetooth/hci0/device/coredump
@@ -53,8 +73,10 @@ echo 1 > /sys/class/bluetooth/hci0/device/coredump
 
 > ### ⚠️ This is a one-way trip
 >
-> On this chip, requesting a coredump wedges the controller **exactly as the
-> natural failure does** — same signature, same disappearance from the USB bus.
+> On this chip, requesting a coredump wedges the controller **with the same
+> outcome as a natural failure**: same reset failure, same disappearance from the USB
+> bus. The assert differs (`tra_usb3.c #764`), so use this to study the reset, not the
+> cause of the natural assert.
 > Recovering requires a full power drain
 > ([RECOVERY.md](RECOVERY.md#the-fix-full-power-drain)). Do not run this on a
 > machine you cannot power-cycle, and make sure you are not depending on a
@@ -122,27 +144,37 @@ strings /var/log/bt-coredumps/*.bin | grep -A3 ASSERT
 ## Upstream patches from this investigation
 
 Reading the failing reset path turned up two bugs in `btmtk_usb_subsys_reset()`.
-In both, a reset that had demonstrably failed was reported to the caller as
-success. Merged into `bluetooth-next` (Luiz Augusto von Dentz):
+In both, a failed reset could be reported to the caller as success. Applied by Luiz
+Augusto von Dentz, in Linux 7.3 and the 7.2, 6.18 and 6.12 stable trees:
 
-### [`771e812f94b3`](https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git/commit/?id=771e812f94b3) — Do not report success when subsys reset fails
+### [`59c3ee19ca88`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=59c3ee19ca88) Do not report success when subsys reset fails
 
 The function verifies the reset by reading the chip id back. When that read
 succeeded at the bus level but returned an id of **zero**, it logged
-`"Can't get device id, subsys reset fail."` and then returned that zero — which
+`"Can't get device id, subsys reset fail."` and then returned that zero, which
 its caller reads as success. Now returns `-ENODEV`.
 
-### [`54c03e6bc718`](https://git.kernel.org/pub/scm/linux/kernel/git/bluetooth/bluetooth-next.git/commit/?id=54c03e6bc718) — Do not discard the subsystem reset timeout
+In the natural failures the id read times out instead, and that branch already
+returned an error before this patch. The patch is correct for the zero-id case, but
+that case was not observed here, and the log line is the same for both.
 
-When the `MTK_BT_RST_DONE` poll timed out, the error was stored in `err` — and
-then immediately overwritten by the return value of the following chip-id read,
+### [`21b50c24843b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=21b50c24843b) Do not discard the subsystem reset timeout
+
+When the `MTK_BT_RST_DONE` poll timed out, the error was stored in `err` and then
+immediately overwritten by the return value of the following chip-id read,
 so the timeout never reached the caller. This was a regression from commit
 `3dcb122b3064`; the timeout is now kept in a separate variable and returned.
 
-**Scope, honestly:** these fix error *reporting*. They make a failed reset
-visible to the caller, which is a prerequisite for anything reacting to it. They
-do **not** make this controller recoverable — that requires a ROM fix from
-MediaTek.
+### [`btmtk_usb_isointf_init()` error handling](https://lore.kernel.org/linux-bluetooth/20261029224022.1233751-1-ismailtarim7@gmail.com/)
+
+A separate fix, accepted into `bluetooth-next`: stop the ISO RX URB when the `0xfd98`
+write fails and check the result of `__set_mtk_intr_interface()`. Those error paths
+never fired in 245 setups on this machine, so it was verified with fault injection.
+
+**Scope, honestly:** these fix error handling. They make a failed reset visible to
+the caller, which is a prerequisite for anything reacting to it. They do **not**
+make this controller recoverable; that needs a firmware fix or a recovery sequence
+from MediaTek.
 
 ---
 
